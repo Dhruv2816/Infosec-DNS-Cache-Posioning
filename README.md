@@ -53,14 +53,14 @@ The goal is to redirect the domain **`sprightly-torrone-5f4946.netlify.app`** fr
 To differentiate between the original website and the attacker's spoofed version, we have modified the attacker's `index.html`:
 
 - **Compromised Site:** Displays a large, **Red Blinking Banner** at the top:
-  `VISUAL PROOF: DNS CACHE POISONING ATTACK SUCCESSFUL 🚨`
+  `VISUAL PROOF: DNS CACHE POISONING ATTACK SUCCESSFUL`
 - **Original Reference:** The version in the root directory (`/Submission_assignment_2/index.html`) is the clean version without this banner.
 
 **Fetch Proof (Victim Terminal):**
 ```bash
 curl http://sprightly-torrone-5f4946.netlify.app
 ```
-Wait for the response—The top of the output will show the **COMPROMISED** banner! 🎯🔥
+Wait for the response—The top of the output will show the **COMPROMISED** banner!
 
 ---
 
