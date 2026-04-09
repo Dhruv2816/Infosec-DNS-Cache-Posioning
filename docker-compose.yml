@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  client:
+    image: ubuntu:20.04
+    container_name: client
+    tty: true
+    command: /bin/bash -c "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y dnsutils iputils-ping net-tools && tail -f /dev/null"
+    networks:
+      dns_net:
+        ipv4_address: 10.9.0.5
+
+  dns_server:
+    build: ./dns_server
+    container_name: dns_server
+    tty: true
+    networks:
+      dns_net:
+        ipv4_address: 10.9.0.53
+
+  dns_server_secure:
+    build: ./dns_server_secure
+    container_name: dns_server_secure
+    tty: true
+    profiles:
+      - secure
+    networks:
+      dns_net:
+        ipv4_address: 10.9.0.153
+
+  attacker:
+    image: ubuntu:20.04
+    container_name: attacker
+    tty: true
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    command: /bin/bash -c "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y gcc make tcpdump scapy iproute2 net-tools nano python3 && python3 -m http.server 80 & tail -f /dev/null"
+    networks:
+      dns_net:
+        ipv4_address: 10.9.0.105
+
+networks:
+  dns_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.9.0.0/24
