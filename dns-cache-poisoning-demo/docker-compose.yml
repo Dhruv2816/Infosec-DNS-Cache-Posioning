@@ -1,47 +1,111 @@
-version: "3.8"
-
-services:
-  dns:
-    build: ./dns
-    container_name: dns
-    networks:
-      test_net:
-        ipv4_address: 10.0.0.2
-    volumes:
-        - ./dns:/src
-    tty: true
-
-  victim:
-    build: ./victim
-    container_name: victim
-    networks:
-      test_net:
-        ipv4_address: 10.0.0.3
-    tty: true
-
-  attacker:
-    build: ./attacker
-    container_name: attacker
-    volumes:
-        - ./attacker:/src
-    networks:
-      test_net:
-        ipv4_address: 10.0.0.4
-    tty: true
-
-  upstream_dns:
-    build: ./upstream_dns
-    container_name: upstream_dns
-    volumes:
-        - ./upstream_dns:/src
-    networks:
-      test_net:
-        ipv4_address: 10.0.0.5
-    tty: true
+version: "3.9"
 
 networks:
-  test_net:
+  dns_net:
     driver: bridge
     ipam:
       config:
         - subnet: 10.0.0.0/24
+
+services:
+
+  # ── Authoritative DNS (signs responses with HMAC) ──────────────────────────
+  upstream_dns:
+    build: ./upstream_dns
+    container_name: upstream_dns
+    hostname: upstream_dns
+    networks:
+      dns_net:
+        ipv4_address: 10.0.0.5
+    environment:
+      - DNS_SECRET=shared_tsig_secret_2024
+    cap_add:
+      - NET_ADMIN
+    restart: unless-stopped
+
+  # ── Vulnerable DNS Resolver ────────────────────────────────────────────────
+  dns:
+    build: ./dns
+    container_name: dns
+    hostname: dns
+    networks:
+      dns_net:
+        ipv4_address: 10.0.0.2
+    depends_on:
+      - upstream_dns
+      - monitor
+    restart: unless-stopped
+
+  # ── Hardened DNS Resolver ──────────────────────────────────────────────────
+  dns_hardened:
+    build: ./dns_hardened
+    container_name: dns_hardened
+    hostname: dns_hardened
+    networks:
+      dns_net:
+        ipv4_address: 10.0.0.6
+    depends_on:
+      - upstream_dns
+      - monitor
+    environment:
+      - DNS_SECRET=shared_tsig_secret_2024
+    restart: unless-stopped
+
+  # ── Victim 1 — uses vulnerable resolver ───────────────────────────────────
+  victim:
+    build: ./victim
+    container_name: victim
+    hostname: victim
+    networks:
+      dns_net:
+        ipv4_address: 10.0.0.3
+    dns:
+      - 10.0.0.2
+    depends_on:
+      - dns
+    tty: true
+    restart: unless-stopped
+
+  # ── Victim 2 — uses hardened resolver (shows immunity) ────────────────────
+  victim2:
+    build: ./victim
+    container_name: victim2
+    hostname: victim2
+    networks:
+      dns_net:
+        ipv4_address: 10.0.0.7
+    dns:
+      - 10.0.0.6
+    depends_on:
+      - dns_hardened
+    tty: true
+    restart: unless-stopped
+
+  # ── Attacker ───────────────────────────────────────────────────────────────
+  attacker:
+    build: ./attacker
+    container_name: attacker
+    hostname: attacker
+    networks:
+      dns_net:
+        ipv4_address: 10.0.0.4
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    depends_on:
+      - dns
+      - dns_hardened
+    tty: true
+    restart: unless-stopped
+
+  # ── Live Monitor Dashboard ─────────────────────────────────────────────────
+  monitor:
+    build: ./monitor
+    container_name: monitor
+    hostname: monitor
+    networks:
+      dns_net:
+        ipv4_address: 10.0.0.8
+    ports:
+      - "8080:8080"     # Access dashboard at http://localhost:8080
+    restart: unless-stopped

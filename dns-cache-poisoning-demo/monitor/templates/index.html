@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>DNS Cache Poisoning — Live Monitor</title>
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg0:    #07090F;
+      --bg1:    #0D1117;
+      --bg2:    #111827;
+      --bg3:    #1A2235;
+      --border: #1E3A5F;
+      --cyan:   #00D4FF;
+      --red:    #FF4444;
+      --amber:  #F59E0B;
+      --green:  #22C55E;
+      --purple: #A855F7;
+      --white:  #FFFFFF;
+      --light:  #E2E8F0;
+      --muted:  #94A3B8;
+      --dim:    #4B5563;
+    }
+
+    body {
+      background: var(--bg1);
+      color: var(--light);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      min-height: 100vh;
+    }
+
+    /* ── Header ──────────────────────────────────────────────────────────── */
+    header {
+      background: var(--bg0);
+      border-bottom: 2px solid var(--cyan);
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky; top: 0; z-index: 100;
+    }
+    header h1 {
+      font-family: 'Consolas', monospace;
+      font-size: 17px;
+      color: var(--white);
+      letter-spacing: 1px;
+    }
+    header h1 span { color: var(--cyan); }
+    .live-badge {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 11px; color: var(--muted); font-family: monospace;
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--green);
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+    /* ── Layout ──────────────────────────────────────────────────────────── */
+    .page { padding: 20px 24px; display: flex; flex-direction: column; gap: 18px; }
+
+    /* ── Stat Cards Row ──────────────────────────────────────────────────── */
+    .stat-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 12px;
+    }
+    .stat-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 16px 18px;
+      position: relative;
+      overflow: hidden;
+    }
+    .stat-card::before {
+      content: '';
+      position: absolute; left: 0; top: 0; bottom: 0;
+      width: 3px;
+      background: var(--accent-col, var(--cyan));
+    }
+    .stat-card .label {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+      color: var(--muted); margin-bottom: 6px;
+    }
+    .stat-card .value {
+      font-family: 'Consolas', monospace;
+      font-size: 30px; font-weight: bold;
+      color: var(--accent-col, var(--cyan));
+      line-height: 1;
+    }
+    .stat-card .sub { font-size: 10px; color: var(--dim); margin-top: 4px; }
+
+    /* ── Section headers ─────────────────────────────────────────────────── */
+    .section-title {
+      font-family: 'Consolas', monospace;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 6px;
+      margin-bottom: 10px;
+    }
+
+    /* ── Two-column resolver panels ─────────────────────────────────────── */
+    .resolver-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+    @media (max-width: 900px) { .resolver-grid { grid-template-columns: 1fr; } }
+
+    .resolver-panel {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .resolver-panel.vulnerable { border-top: 2px solid var(--red); }
+    .resolver-panel.hardened   { border-top: 2px solid var(--green); }
+
+    .panel-header {
+      padding: 10px 14px;
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+    .panel-title {
+      font-family: 'Consolas', monospace;
+      font-size: 12px; font-weight: bold;
+    }
+    .vulnerable .panel-title { color: var(--red); }
+    .hardened   .panel-title { color: var(--green); }
+    .panel-ip { font-family: monospace; font-size: 11px; color: var(--muted); }
+
+    /* Mini stat badges in panel header */
+    .panel-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+    .mini-badge {
+      font-family: monospace; font-size: 10px;
+      padding: 2px 7px; border-radius: 3px;
+      border: 1px solid currentColor;
+    }
+    .mini-badge.red    { color: var(--red); }
+    .mini-badge.green  { color: var(--green); }
+    .mini-badge.cyan   { color: var(--cyan); }
+    .mini-badge.amber  { color: var(--amber); }
+
+    /* Event log */
+    .event-log {
+      height: 260px;
+      overflow-y: auto;
+      padding: 6px 0;
+    }
+    .event-log::-webkit-scrollbar { width: 4px; }
+    .event-log::-webkit-scrollbar-track { background: transparent; }
+    .event-log::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 2px; }
+
+    .event-row {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 4px 14px;
+      border-bottom: 1px solid #0D1117;
+      animation: fadeIn 0.3s ease;
+      font-size: 12px;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } }
+    .event-row:hover { background: var(--bg3); }
+    .event-ts   { color: var(--dim); font-family: monospace; white-space: nowrap; flex-shrink: 0; }
+    .event-icon { flex-shrink: 0; width: 16px; text-align: center; }
+    .event-type {
+      font-family: 'Consolas', monospace; font-size: 10px;
+      padding: 1px 5px; border-radius: 3px;
+      flex-shrink: 0; white-space: nowrap;
+    }
+    .event-detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .event-domain { color: var(--cyan); font-family: monospace; }
+    .event-ip     { color: var(--amber); font-family: monospace; }
+
+    /* ── Cache panel ─────────────────────────────────────────────────────── */
+    .cache-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+    }
+    .cache-panel {
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+      overflow: hidden;
+    }
+    .cache-header {
+      padding: 8px 14px; background: var(--bg0);
+      font-family: monospace; font-size: 11px; color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between;
+    }
+    .cache-list { max-height: 160px; overflow-y: auto; }
+    .cache-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 5px 14px; border-bottom: 1px solid var(--bg1);
+      font-family: monospace; font-size: 11px;
+    }
+    .cache-row:hover { background: var(--bg3); }
+    .cache-domain { color: var(--light); max-width: 65%; overflow: hidden; text-overflow: ellipsis; }
+    .cache-ip-real   { color: var(--green); }
+    .cache-ip-poison { color: var(--red); font-weight: bold; }
+    .cache-empty { padding: 12px 14px; color: var(--dim); font-family: monospace; font-size: 11px; }
+
+    /* ── Attack log ──────────────────────────────────────────────────────── */
+    .attack-section { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .alert-panel {
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+      overflow: hidden;
+    }
+    .alert-header {
+      padding: 8px 14px; border-bottom: 1px solid var(--border);
+      font-family: monospace; font-size: 11px; font-weight: bold;
+    }
+    .alert-header.red   { color: var(--red);   background: rgba(255,68,68,.08); }
+    .alert-header.amber { color: var(--amber);  background: rgba(245,158,11,.08); }
+    .alert-list { max-height: 160px; overflow-y: auto; }
+    .alert-row {
+      padding: 5px 14px; border-bottom: 1px solid var(--bg1);
+      font-family: monospace; font-size: 11px;
+    }
+    .alert-row .ts { color: var(--dim); margin-right: 6px; }
+    .alert-row.red   { color: var(--red); }
+    .alert-row.amber { color: var(--amber); }
+    .alert-empty { padding: 10px 14px; color: var(--dim); font-family: monospace; font-size: 11px; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────────────── -->
+<header>
+  <h1>DNS Cache Poisoning — <span>Live Monitor</span></h1>
+  <div class="live-badge">
+    <div class="dot" id="dot"></div>
+    <span id="clock">--:--:--</span>
+    &nbsp;|&nbsp;
+    <span id="last-update">waiting...</span>
+  </div>
+</header>
+
+<div class="page">
+
+  <!-- ── Top stat cards ──────────────────────────────────────────────────── -->
+  <div class="stat-row">
+    <div class="stat-card" style="--accent-col: var(--cyan)">
+      <div class="label">Total Queries</div>
+      <div class="value" id="s-queries">0</div>
+      <div class="sub">vulnerable + hardened</div>
+    </div>
+    <div class="stat-card" style="--accent-col: var(--red)">
+      <div class="label">Attack Packets</div>
+      <div class="value" id="s-attacks">0</div>
+      <div class="sub">spoofed responses detected</div>
+    </div>
+    <div class="stat-card" style="--accent-col: #FF0000">
+      <div class="label">Cache Poisoned</div>
+      <div class="value" id="s-poisoned">0</div>
+      <div class="sub">vulnerable resolver</div>
+    </div>
+    <div class="stat-card" style="--accent-col: var(--amber)">
+      <div class="label">Blocked (Hardened)</div>
+      <div class="value" id="s-blocked">0</div>
+      <div class="sub">TSIG / source-IP / TxID</div>
+    </div>
+    <div class="stat-card" style="--accent-col: var(--green)">
+      <div class="label">Cache Entries</div>
+      <div class="value" id="s-cache-total">0</div>
+      <div class="sub">across both resolvers</div>
+    </div>
+    <div class="stat-card" style="--accent-col: var(--purple)">
+      <div class="label">Upstream Responses</div>
+      <div class="value" id="s-upstream">0</div>
+      <div class="sub">from authoritative server</div>
+    </div>
+  </div>
+
+  <!-- ── Resolver event logs ─────────────────────────────────────────────── -->
+  <div>
+    <div class="section-title">Live Event Log — per Resolver</div>
+    <div class="resolver-grid">
+
+      <!-- Vulnerable -->
+      <div class="resolver-panel vulnerable">
+        <div class="panel-header">
+          <div>
+            <div class="panel-title">⚠ dns_vulnerable</div>
+            <div class="panel-ip">10.0.0.2 · port 22222 · TxID 10000-10050</div>
+          </div>
+          <div class="panel-badges">
+            <span class="mini-badge cyan" id="vul-q">Q: 0</span>
+            <span class="mini-badge red"  id="vul-a">ATK: 0</span>
+            <span class="mini-badge red"  id="vul-p">POIS: 0</span>
+          </div>
+        </div>
+        <div class="event-log" id="log-vulnerable"></div>
+      </div>
+
+      <!-- Hardened -->
+      <div class="resolver-panel hardened">
+        <div class="panel-header">
+          <div>
+            <div class="panel-title">🛡 dns_hardened</div>
+            <div class="panel-ip">10.0.0.6 · random port · CSPRNG · TSIG</div>
+          </div>
+          <div class="panel-badges">
+            <span class="mini-badge cyan"  id="hrd-q">Q: 0</span>
+            <span class="mini-badge amber" id="hrd-b">BLK: 0</span>
+            <span class="mini-badge green" id="hrd-l">OK: 0</span>
+          </div>
+        </div>
+        <div class="event-log" id="log-hardened"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Cache state ─────────────────────────────────────────────────────── -->
+  <div>
+    <div class="section-title">Cache State (live)</div>
+    <div class="cache-grid">
+      <div class="cache-panel">
+        <div class="cache-header">
+          <span>dns_vulnerable  (10.0.0.2)</span>
+          <span id="vul-cache-count" style="color:var(--red)">0 entries</span>
+        </div>
+        <div class="cache-list" id="cache-vulnerable">
+          <div class="cache-empty">empty</div>
+        </div>
+      </div>
+      <div class="cache-panel">
+        <div class="cache-header">
+          <span>dns_hardened  (10.0.0.6)</span>
+          <span id="hrd-cache-count" style="color:var(--green)">0 entries</span>
+        </div>
+        <div class="cache-list" id="cache-hardened">
+          <div class="cache-empty">empty</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Alert logs ──────────────────────────────────────────────────────── -->
+  <div>
+    <div class="section-title">Security Alerts</div>
+    <div class="attack-section">
+      <div class="alert-panel">
+        <div class="alert-header red">☠ Poisoning Attempts (attack_detected / poisoned)</div>
+        <div class="alert-list" id="log-attacks">
+          <div class="alert-empty">no attacks detected yet</div>
+        </div>
+      </div>
+      <div class="alert-panel">
+        <div class="alert-header amber">🛡 Blocked by Hardened Resolver</div>
+        <div class="alert-list" id="log-blocked">
+          <div class="alert-empty">no blocked packets yet</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /page -->
+
+<script>
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function eventRow(ev) {
+  const domain = esc(ev.domain || ev.claimed_ip || '');
+  const ip     = esc(ev.ip || ev.fake_ip || ev.claimed_ip || ev.from || '');
+  const detail = ev.reason ? `reason: ${esc(ev.reason)}  ` : '';
+  return `<div class="event-row">
+    <span class="event-ts">${esc(ev.ts)}</span>
+    <span class="event-icon">${esc(ev.icon||'•')}</span>
+    <span class="event-type" style="background:${esc(ev.color)}22;color:${esc(ev.color)}">${esc(ev.type)}</span>
+    <span class="event-detail">
+      ${detail}
+      ${domain ? `<span class="event-domain">${domain}</span>` : ''}
+      ${ip     ? ` → <span class="event-ip">${ip}</span>` : ''}
+    </span>
+  </div>`;
+}
+
+// ── Clock ────────────────────────────────────────────────────────────────────
+function tick() {
+  document.getElementById('clock').textContent = new Date().toTimeString().slice(0,8);
+}
+setInterval(tick, 1000); tick();
+
+// ── State ─────────────────────────────────────────────────────────────────────
+const REAL_IPS = new Set(['1.2.3.4']);   // known legitimate IPs
+let lastEventId = 0;
+
+function isPoison(ip) {
+  return ip && !REAL_IPS.has(ip) && !ip.startsWith('10.0.0.5');
+}
+
+// ── Fetch & render ────────────────────────────────────────────────────────────
+async function refresh() {
+  try {
+    const [evRes, stRes] = await Promise.all([
+      fetch('/api/events'),
+      fetch('/api/stats'),
+    ]);
+    const events = await evRes.json();
+    const data   = await stRes.json();
+    renderStats(data);
+    renderEvents(events);
+    renderCache(data.cache);
+    renderAlerts(data.attacks, data.blocked);
+    document.getElementById('last-update').textContent = 'updated ' + new Date().toTimeString().slice(0,8);
+  } catch(e) {
+    document.getElementById('dot').style.background = '#FF4444';
+  }
+}
+
+// ── Stats cards ───────────────────────────────────────────────────────────────
+function renderStats(data) {
+  const vc = data.counters.dns_vulnerable || {};
+  const hc = data.counters.dns_hardened   || {};
+  const uc = data.counters.upstream_dns   || {};
+
+  const totalQ = (vc.query||0) + (hc.query||0);
+  document.getElementById('s-queries').textContent  = totalQ.toLocaleString();
+  document.getElementById('s-attacks').textContent  = (vc.attack_detected||0).toLocaleString();
+  document.getElementById('s-poisoned').textContent = (vc.poisoned||0).toLocaleString();
+  document.getElementById('s-blocked').textContent  = (hc.blocked||0).toLocaleString();
+  document.getElementById('s-upstream').textContent = (uc.upstream_response||0).toLocaleString();
+
+  const totalCache = Object.keys(data.cache.dns_vulnerable||{}).length
+                   + Object.keys(data.cache.dns_hardened||{}).length;
+  document.getElementById('s-cache-total').textContent = totalCache;
+
+  // mini badges
+  document.getElementById('vul-q').textContent = `Q: ${(vc.query||0).toLocaleString()}`;
+  document.getElementById('vul-a').textContent = `ATK: ${(vc.attack_detected||0).toLocaleString()}`;
+  document.getElementById('vul-p').textContent = `POIS: ${(vc.poisoned||0).toLocaleString()}`;
+  document.getElementById('hrd-q').textContent = `Q: ${(hc.query||0).toLocaleString()}`;
+  document.getElementById('hrd-b').textContent = `BLK: ${(hc.blocked||0).toLocaleString()}`;
+  document.getElementById('hrd-l').textContent = `OK: ${(hc.legitimate_response||0).toLocaleString()}`;
+}
+
+// ── Event logs ────────────────────────────────────────────────────────────────
+function renderEvents(events) {
+  const vulEl = document.getElementById('log-vulnerable');
+  const hrdEl = document.getElementById('log-hardened');
+
+  const vulRows = events.filter(e => e.source === 'dns_vulnerable').slice(0,80);
+  const hrdRows = events.filter(e => e.source === 'dns_hardened').slice(0,80);
+
+  vulEl.innerHTML = vulRows.length ? vulRows.map(eventRow).join('') : '<div style="padding:10px 14px;color:var(--dim);font-family:monospace">no events yet</div>';
+  hrdEl.innerHTML = hrdRows.length ? hrdRows.map(eventRow).join('') : '<div style="padding:10px 14px;color:var(--dim);font-family:monospace">no events yet</div>';
+}
+
+// ── Cache ─────────────────────────────────────────────────────────────────────
+function renderCache(cache) {
+  function buildList(entries, elId, countId) {
+    const el = document.getElementById(elId);
+    const count = document.getElementById(countId);
+    const keys = Object.keys(entries||{});
+    count.textContent = keys.length + ' entries';
+    if (keys.length === 0) {
+      el.innerHTML = '<div class="cache-empty">empty</div>';
+      return;
+    }
+    el.innerHTML = keys.map(domain => {
+      const ip = entries[domain];
+      const cls = isPoison(ip) ? 'cache-ip-poison' : 'cache-ip-real';
+      const flag = isPoison(ip) ? ' ⚠ POISONED' : '';
+      return `<div class="cache-row">
+        <span class="cache-domain" title="${esc(domain)}">${esc(domain)}</span>
+        <span class="${cls}">${esc(ip)}${flag}</span>
+      </div>`;
+    }).join('');
+  }
+  buildList(cache.dns_vulnerable, 'cache-vulnerable', 'vul-cache-count');
+  buildList(cache.dns_hardened,   'cache-hardened',   'hrd-cache-count');
+}
+
+// ── Alert logs ────────────────────────────────────────────────────────────────
+function renderAlerts(attacks, blocked) {
+  function buildAlerts(events, elId, cls) {
+    const el = document.getElementById(elId);
+    if (!events || events.length === 0) {
+      el.innerHTML = `<div class="alert-empty">${cls==='red'?'no attacks detected yet':'no blocked packets yet'}</div>`;
+      return;
+    }
+    el.innerHTML = events.slice(0,30).map(ev => {
+      const domain = ev.domain || ev.claimed_ip || '';
+      const ip     = ev.fake_ip || ev.ip || ev.from || ev.claimed_ip || '';
+      const reason = ev.reason ? ` [${esc(ev.reason)}]` : '';
+      return `<div class="alert-row ${cls}">
+        <span class="ts">${esc(ev.ts)}</span>
+        ${esc(ev.type)}${reason}
+        ${domain ? ` · <span style="color:var(--cyan)">${esc(domain)}</span>` : ''}
+        ${ip ? ` → ${esc(ip)}` : ''}
+      </div>`;
+    }).join('');
+  }
+  buildAlerts(attacks, 'log-attacks', 'red');
+  buildAlerts(blocked, 'log-blocked', 'amber');
+}
+
+// ── Poll every 1 second ───────────────────────────────────────────────────────
+setInterval(refresh, 1000);
+refresh();
+</script>
+</body>
+</html>
